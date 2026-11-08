@@ -3,6 +3,7 @@
 use std::sync::{atomic::Ordering, Arc};
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
+use mistralrs_quant::{IsqType, QuantMethod};
 use rand::Rng;
 
 #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -125,6 +126,24 @@ fn resolve_dflash_n_predict(
 }
 
 impl Qwen3_5Model {
+    // Requantizing the promoted head dequantizes it on the GPU first, which can exceed the headroom
+    // left beside a large KV cache; the drafter then just reads the promoted head.
+    fn draft_lm_head_copy(&self, ty: IsqType) -> Option<Arc<dyn QuantMethod>> {
+        match self.text.lm_head().clone().apply_isq(
+            Some(ty),
+            self.text.device.clone(),
+            &std::sync::atomic::AtomicUsize::new(0),
+            None,
+            mistralrs_quant::QuantizeOntoGuard::new(),
+        ) {
+            Ok(head) => Some(head),
+            Err(err) => {
+                tracing::warn!("Keeping the promoted lm_head for drafts; {ty} copy failed: {err}");
+                None
+            }
+        }
+    }
+
     fn mtp_n_predict(&self) -> usize {
         self.mtp_n_predict.load(Ordering::Relaxed)
     }
@@ -170,14 +189,10 @@ impl Qwen3_5Model {
             .set_dflash_tap_layers(drafter.target_layer_ids.clone());
         self.mtp_n_predict.store(n_predict, Ordering::Relaxed);
         self.text.set_store_spec_hidden(true);
-        if let Some(ty) = config.draft_lm_head_isq {
-            let head = self.text.lm_head().clone().apply_isq(
-                Some(ty),
-                self.text.device.clone(),
-                &std::sync::atomic::AtomicUsize::new(0),
-                None,
-                mistralrs_quant::QuantizeOntoGuard::new(),
-            )?;
+        if let Some(head) = config
+            .draft_lm_head_isq
+            .and_then(|ty| self.draft_lm_head_copy(ty))
+        {
             *self.draft_lm_head.lock().expect("draft lm_head poisoned") = Some(head);
         }
         let adaptive = config.n_predict.is_none()
@@ -622,18 +637,9 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         self.text.set_store_spec_hidden(true);
         // The promoted (sensitive) lm_head is read once per draft; a base-type copy makes the
         // drafter cheaper without touching what the target verifies with
-        if let Some(ty) = config.draft_lm_head_isq {
-            let head = self.text.lm_head().clone().apply_isq(
-                Some(ty),
-                self.text.device.clone(),
-                &std::sync::atomic::AtomicUsize::new(0),
-                None,
-                mistralrs_quant::QuantizeOntoGuard::new(),
-            )?;
-            *self.draft_lm_head.lock().expect("draft lm_head poisoned") = Some(head);
-        } else {
-            *self.draft_lm_head.lock().expect("draft lm_head poisoned") = None;
-        }
+        *self.draft_lm_head.lock().expect("draft lm_head poisoned") = config
+            .draft_lm_head_isq
+            .and_then(|ty| self.draft_lm_head_copy(ty));
         Ok(Some(SpeculativeAttachInfo::mtp(
             "built-in".to_string(),
             n_predict,
