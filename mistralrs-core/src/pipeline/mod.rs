@@ -66,7 +66,9 @@ pub(crate) use isq::{sanitize_quantized_weight_source_config, IsqModelLoader};
 use llguidance::toktrie::TokEnv;
 #[cfg(feature = "cuda")]
 pub(crate) use loaders::HostBacking;
-pub(crate) use loaders::{apply_model_activation_memory, checkpoint_runtime_size};
+pub(crate) use loaders::{
+    activation_reservation_cap_bytes, apply_model_activation_memory, checkpoint_runtime_size,
+};
 pub use loaders::{
     ActivationMemoryContext, ActivationMemoryEstimate, ActivationModelConfig, AdapterKind,
     AutoDeviceMapParams, AutoDeviceMapQuantization, AutoEmbeddingLoader, AutoMultimodalLoader,

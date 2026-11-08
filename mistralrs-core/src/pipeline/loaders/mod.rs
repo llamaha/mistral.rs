@@ -8,8 +8,8 @@ mod normal_loaders;
 mod qwen_vision_memory;
 mod resources;
 pub(crate) use activation_memory::{
-    apply_model_activation_memory, estimate_model_activation_memory,
-    reserve_model_activation_memory,
+    activation_reservation_cap_bytes, apply_model_activation_memory,
+    estimate_model_activation_memory, reserve_model_activation_memory,
 };
 pub use activation_memory::{
     ActivationMemoryContext, ActivationMemoryEstimate, ActivationModelConfig,

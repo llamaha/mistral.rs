@@ -22,6 +22,9 @@ const MAX_NATIVE_FLASH_GQA_GROUPS: usize = 8;
 const METAL_D512_SMALL_QUERY_TOKENS: usize = 8;
 // Metal rounds each pooled buffer up to a power of two.
 const METAL_BUFFER_ROUNDING_BOUND: usize = 2;
+// Caps the attention-inclusive activation reservation; the gather-SDPA estimate for head dims flash
+// can't serve (Gemma 4's 512-wide global layers) books far more than the runtime allocates.
+const ACTIVATION_RESERVATION_CAP_ENV: &str = "MISTRALRS_ACTIVATION_RESERVATION_MIB";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ActivationModelConfig {
@@ -926,7 +929,44 @@ pub(crate) fn estimate_model_activation_memory(
     };
     #[cfg(not(feature = "metal"))]
     let cache_write_workspace = 0;
-    estimate.reserve_attention_inventory(cache_write_workspace, ctx.limits.max_num_seqs)
+    estimate
+        .reserve_attention_inventory(cache_write_workspace, ctx.limits.max_num_seqs)
+        .map(cap_activation_estimate)
+}
+
+pub(crate) fn activation_reservation_cap_bytes() -> Option<usize> {
+    let raw = std::env::var(ACTIVATION_RESERVATION_CAP_ENV).ok()?;
+    match raw.trim().parse::<usize>() {
+        Ok(mib) => Some(mib.saturating_mul(1024 * 1024)),
+        Err(_) => {
+            tracing::warn!(
+                "Ignoring {ACTIVATION_RESERVATION_CAP_ENV}={raw:?}: expected a MiB count"
+            );
+            None
+        }
+    }
+}
+
+// Applied to every estimate (baseline and per-capacity) so the capacity delta stays consistent.
+fn cap_activation_estimate(mut estimate: ActivationMemoryEstimate) -> ActivationMemoryEstimate {
+    let Some(cap) = activation_reservation_cap_bytes() else {
+        return estimate;
+    };
+    let floor = estimate
+        .mapped_non_attention_bytes
+        .max(estimate.non_mapped_non_attention_bytes);
+    let cap = cap.max(floor);
+    let peak = estimate.mapped_bytes.max(estimate.non_mapped_bytes);
+    if peak > cap {
+        tracing::info!(
+            "Capping activation reservation at {} MiB (estimate {} MiB) via {ACTIVATION_RESERVATION_CAP_ENV}",
+            cap / (1024 * 1024),
+            peak / (1024 * 1024)
+        );
+    }
+    estimate.mapped_bytes = estimate.mapped_bytes.min(cap);
+    estimate.non_mapped_bytes = estimate.non_mapped_bytes.min(cap);
+    estimate
 }
 
 pub(crate) fn apply_model_activation_memory(

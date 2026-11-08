@@ -123,6 +123,8 @@ pub(super) fn forward_workspace_bytes(
     attention_bytes: usize,
     attention_is_complete: bool,
 ) -> Result<ForwardWorkspaceBytes> {
+    let attention_bytes = crate::pipeline::activation_reservation_cap_bytes()
+        .map_or(attention_bytes, |cap| attention_bytes.min(cap));
     let Some(plan) = plan else {
         return Ok(ForwardWorkspaceBytes {
             primary: attention_bytes,
