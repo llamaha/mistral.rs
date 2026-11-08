@@ -28,8 +28,13 @@ use crate::{
 const MROPE_DIMS: usize = 3;
 // Stands in for the not-yet-sampled next token; the bootstrap refresh rewrites its KV
 const PLACEHOLDER_TOKEN: u32 = 0;
-// Target-only block hashes can alias MTP rows with different next-token inputs, including interior blocks.
-pub(crate) const BUILTIN_MTP_PREFIX_REPLAY: SpeculativePrefixReplay = SpeculativePrefixReplay::Full;
+// The MTP rows at a block's last position were written with the next block's first token, which the
+// target-only block hash does not cover, so a cached hit can alias them. Only the drafter reads those
+// rows and every draft is verified by the target, so a stale row costs acceptance rate, not output.
+// Replaying the final block rebuilds the rows that matter most; a Full replay re-prefills the whole
+// conversation on every agent turn (24 s at 78k tokens), which costs more than MTP saves.
+pub(crate) const BUILTIN_MTP_PREFIX_REPLAY: SpeculativePrefixReplay =
+    SpeculativePrefixReplay::Suffix(crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
 
 pub struct MtpAttentionInputs<'a> {
     pub kv_cache: (Tensor, Tensor),
