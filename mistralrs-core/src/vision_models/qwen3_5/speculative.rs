@@ -783,7 +783,10 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         if n == 0 {
             return Vec::new();
         }
-        if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
+        // Clone out of the lock: speculative_depth_candidates() takes it again and the mutex is not
+        // reentrant, which deadlocked CUDA graph precapture at startup with a drafter attached.
+        let drafter = self.dflash.lock().expect("dflash poisoned").clone();
+        if let Some(drafter) = drafter {
             if self.mtp_auto_depth.load(Ordering::Relaxed) {
                 return auto_depth_graph_plans(&self.speculative_depth_candidates(), n);
             }
