@@ -413,21 +413,25 @@ impl PagedPrefixCacheValidator for HybridPagedPrefixValidator {
             ) {
                 let n_blocks = boundary / block_size;
                 let current_owner = block_hashes.last().copied();
-                let checkpoint = current_owner.and_then(|_| {
+                // Checkpoints are taken at prompt boundaries, so the shared prefix of the next turn
+                // (prompt plus the previous answer) is usually a few blocks longer than any stored key.
+                // Take the longest checkpoint at or below the boundary and replay the blocks after it.
+                let found = current_owner.and_then(|_| {
                     get_mut_arcmutex!(self.prefix_cacher)
-                        .peek_paged_recurrent_prefix(&block_hashes[..n_blocks])
+                        .peek_longest_paged_recurrent_prefix(&block_hashes[..n_blocks], n_blocks)
                 });
-                if let Some(checkpoint) = checkpoint {
-                    if checkpoint.auxiliary.is_some() {
+                if let Some((found_blocks, checkpoint)) = found {
+                    if checkpoint.auxiliary.is_some() && found_blocks > 0 {
+                        let found_tokens = found_blocks * block_size;
                         let replay_tokens = get_mut_arcmutex!(self.pipeline)
                             .speculative_prefix_replay()
-                            .replay_tokens(boundary);
+                            .replay_tokens(found_tokens);
                         return Ok(self.stage_recurrent_restore(HybridPrefixRestore {
                             sequence_id,
                             slot_idx,
-                            cached_tokens: boundary,
+                            cached_tokens: found_tokens,
                             checkpoint,
-                            prefix_key: block_hashes[..n_blocks].to_vec(),
+                            prefix_key: block_hashes[..found_blocks].to_vec(),
                             current_owner: current_owner
                                 .expect("recurrent prefix owner requires a full block"),
                             restore_auxiliary: true,

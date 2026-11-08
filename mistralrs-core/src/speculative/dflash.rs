@@ -184,8 +184,13 @@ fn dflash_prefix_replay(
 ) -> SpeculativePrefixReplay {
     let mut required = 0;
     for window in layer_windows {
+        // Full-attention drafter layers alias only the rows at a block's last position (written with
+        // the next block's first token). The target verifies every draft, so replaying the last block
+        // trades a little acceptance for keeping the prefix cache across agent turns.
         let Some(window) = window else {
-            return SpeculativePrefixReplay::Full;
+            return SpeculativePrefixReplay::Suffix(
+                crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
+            );
         };
         required = required.max(window);
     }
@@ -4150,7 +4155,9 @@ mod tests {
         );
         assert_eq!(
             dflash_prefix_replay([Some(2048), None, Some(1024)]),
-            SpeculativePrefixReplay::Full
+            SpeculativePrefixReplay::Suffix(
+                crate::paged_attention::DEFAULT_PAGED_ATTENTION_BLOCK_SIZE
+            )
         );
     }
 
