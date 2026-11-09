@@ -4,6 +4,7 @@ pub mod cache;
 pub mod config;
 pub mod dflash;
 pub mod driver;
+pub mod dspine;
 pub(crate) mod gdn_transitions;
 pub(crate) mod hybrid_state;
 pub mod logging;

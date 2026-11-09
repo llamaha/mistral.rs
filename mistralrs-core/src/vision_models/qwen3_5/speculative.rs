@@ -179,6 +179,7 @@ impl Qwen3_5Model {
             },
             false,
         )?;
+        drafter.prepare_target_head(self.text.lm_head())?;
         let block = drafter.block_size();
         let checkpoint_lanes = self.text.cache.hybrid().checkpoint_lanes();
         let n_predict = resolve_dflash_n_predict(config.n_predict, block, checkpoint_lanes)?;
@@ -203,7 +204,9 @@ impl Qwen3_5Model {
         let adaptive = adaptive && drafter.enable_adaptive(n_predict, max_live_sequences);
         let autotuned = config.n_predict.is_none() && !adaptive;
         self.mtp_auto_depth.store(autotuned, Ordering::Relaxed);
-        let kind = if drafter.has_selector() {
+        let kind = if drafter.is_dspine() {
+            "DSpine"
+        } else if drafter.has_selector() {
             "DFlash2"
         } else {
             "DFlash"
@@ -425,7 +428,7 @@ impl Qwen3_5Model {
         if !drafter.contexts_ready_for_draft(ctx.seq_ids) {
             return Ok(None);
         }
-        let sampling_values = if drafter.has_selector()
+        let sampling_values = if drafter.has_ranked_candidates()
             && drafter.draft_sampling_method()
                 == crate::speculative::MtpDraftSamplingMethod::Probabilistic
         {
@@ -494,7 +497,12 @@ impl Qwen3_5Model {
             CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::EagerFallback);
         let fallback_result = (|| {
             let noise = self.dflash_noise_embedding(&drafter, ctx.sampled_tokens, n_predict)?;
-            let hidden = drafter.draft_hidden_batch(ctx.seq_ids, &noise, ctx.base_lens)?;
+            let hidden = drafter.draft_hidden_batch(
+                ctx.seq_ids,
+                &noise,
+                ctx.base_lens,
+                ctx.sampled_tokens,
+            )?;
             dflash_speculative_batch(drafter.finish_proposals(
                 &hidden,
                 ctx.sampled_tokens,
