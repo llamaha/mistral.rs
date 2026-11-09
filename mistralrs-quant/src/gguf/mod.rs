@@ -365,17 +365,18 @@ impl GgufMatMul {
             unreachable!("uses_fast_mmvq() requires QTensor weights")
         };
 
-        // Batch 1-8: use MMVQ (decode kernel)
-        if (1..=fast_mmvq::MMVQ_MAX_BATCH).contains(&flat_batch) {
+        if flat_batch == 0 {
+            return Ok(None);
+        }
+        let Device::Cuda(dev) = q.device() else {
+            unreachable!("uses_fast_mmvq() requires a CUDA weight")
+        };
+        let prefers_mmvq = flat_batch <= fast_mmvq::preferred_max_batch(&dev)
+            || (flat_batch <= fast_mmvq::MMVQ_MAX_BATCH && !fast_mmq::supports(q.dtype()));
+        if prefers_mmvq {
             return Ok(Some(fast_mmvq::plain(q, a)?));
         }
-
-        // Batch > 8: use MMQ (prompt kernel)
-        if flat_batch > fast_mmvq::MMVQ_MAX_BATCH {
-            return Ok(Some(fast_mmq::plain(q, a)?));
-        }
-
-        Ok(None)
+        Ok(Some(fast_mmq::plain(q, a)?))
     }
 
     #[cfg(all(feature = "cuda", has_marlin_kernels))]

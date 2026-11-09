@@ -96,6 +96,11 @@ type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
+/// Largest token batch for which MMVQ beats MMQ on this device; above it MMQ should be used when it supports the type.
+pub(crate) fn preferred_max_batch(dev: &CudaDevice) -> usize {
+    crate::cuda_policy::mmvq_max_batch(&cuda_device_info(dev), MMVQ_MAX_BATCH)
+}
+
 pub(super) fn prefers_weight_prefetch(dev: &CudaDevice) -> bool {
     crate::cuda_policy::prefers_weight_prefetch(&cuda_device_info(dev))
 }

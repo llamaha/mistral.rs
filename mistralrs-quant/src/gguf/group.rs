@@ -139,6 +139,15 @@ mod cuda {
         weights.iter().all(|w| w.dtype() == weights[0].dtype())
     }
 
+    // MMVQ only while it beats MMQ on this device, or while MMQ cannot take the weights at all.
+    fn prefers_mmvq(xs: &Tensor, weights: &[&QTensor], tokens: usize) -> Result<bool> {
+        if tokens > fast_mmvq::MMVQ_MAX_BATCH {
+            return Ok(false);
+        }
+        let mmq_ok = same_dtype(weights) && weights.iter().all(|w| fast_mmq::supports(w.dtype()));
+        Ok(!mmq_ok || tokens <= fast_mmvq::preferred_max_batch(xs.device().as_cuda_device()?))
+    }
+
     fn dense(
         xs: &Tensor,
         entries: &[GroupEntry<'_>],
@@ -173,7 +182,7 @@ mod cuda {
         {
             return Ok(None);
         }
-        if tokens <= fast_mmvq::MMVQ_MAX_BATCH {
+        if prefers_mmvq(xs, &weights, tokens)? {
             if !weights.iter().all(|w| fast_mmvq::supports(w.dtype())) {
                 return Ok(None);
             }
@@ -216,7 +225,7 @@ mod cuda {
         {
             return Ok(None);
         }
-        let output = if tokens <= fast_mmvq::MMVQ_MAX_BATCH {
+        let output = if prefers_mmvq(xs, &[gate, up], tokens)? {
             if !fast_mmvq::supports_fused_glu(xs.dtype(), gate.dtype()) {
                 return Ok(None);
             }
